@@ -255,16 +255,36 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 
 	std::string payload((char *)buffer, size);
 	if (!upload.SendRequest(payload, offset, size)) {
-		m_log.Emsg("Open", "upload.SendRequest() failed");
-		return -ENOENT;
+		m_log.Emsg("HTTPFile::Write", "upload.SendRequest() failed");
+		auto httpCode = upload.getResponseCode();
+		if (httpCode) {
+			std::stringstream ss;
+			ss << "PUT command failed: " << upload.getResponseCode() << ": "
+			   << upload.getResultString();
+			m_log.Emsg("HTTPFile::Write", ss.str().c_str());
+			switch (httpCode) {
+			case 404:
+				return -ENOENT;
+			case 500:
+				return -EIO;
+			case 403:
+				return -EPERM;
+			default:
+				return -EIO;
+			}
+		} else {
+			m_log.Emsg("HTTPFile::Write", "Failed to send PUT command");
+			return -EIO;
+		}
 	} else {
-		m_log.Emsg("Open", "upload.SendRequest() succeeded");
+		m_log.Log(LogMask::Debug, "HTTPFile::Write",
+				  "upload.SendRequest() succeeded");
 		return 0;
 	}
 }
 
 int HTTPFile::Close(long long *retsz) {
-	m_log.Emsg("Close", "Closed our HTTP file");
+	m_log.Emsg("HTTPFile::Close", "Closed our HTTP file");
 	return 0;
 }
 
