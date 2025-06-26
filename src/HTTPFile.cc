@@ -1,6 +1,6 @@
 /***************************************************************
  *
- * Copyright (C) 2024, Pelican Project, Morgridge Institute for Research
+ * Copyright (C) 2025, Pelican Project, Morgridge Institute for Research
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License.  You may
@@ -30,6 +30,7 @@
 #include <XrdVersion.hh>
 #include <curl/curl.h>
 
+#include <charconv>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -93,6 +94,41 @@ int parse_path(const std::string &storagePrefixStr, const char *pathStr,
 }
 
 int HTTPFile::Open(const char *path, int Oflag, mode_t Mode, XrdOucEnv &env) {
+	if (m_is_open) {
+		m_log.Log(LogMask::Warning, "HTTPFile::Open",
+				  "File already open:", path);
+		return -EBADF;
+	}
+	if (Oflag & O_CREAT) {
+		m_log.Log(LogMask::Info, "HTTPFile::Open",
+				  "File opened for creation:", path);
+	}
+	if (Oflag & O_APPEND) {
+		m_log.Log(LogMask::Info, "HTTPFile::Open",
+				  "File opened for append:", path);
+	}
+	if (Oflag & (O_RDWR | O_WRONLY)) {
+		m_write = true;
+		m_log.Log(LogMask::Debug, "HTTPFile::Open",
+				  "File opened for writing:", path);
+		m_write_lk.reset(new std::mutex);
+	}
+	// get the expected file size; only relevant for O_RDWR | O_WRONLY
+	char *asize_char;
+	if ((asize_char = env.Get("oss.asize"))) {
+		off_t result{0};
+		auto [ptr, ec] = std::from_chars(
+			asize_char, asize_char + strlen(asize_char), result);
+		if (ec == std::errc()) {
+			m_object_size = result;
+		} else {
+			std::stringstream ss;
+			ss << "Opened file has oss.asize set to an unparseable value: "
+			   << asize_char;
+			m_log.Log(LogMask::Warning, "HTTPFile::Open", ss.str().c_str());
+		}
+	}
+
 	auto configured_hostname = m_oss->getHTTPHostName();
 	auto configured_hostUrl = m_oss->getHTTPHostUrl();
 	const auto &configured_url_base = m_oss->getHTTPUrlBase();
@@ -101,9 +137,7 @@ int HTTPFile::Open(const char *path, int Oflag, mode_t Mode, XrdOucEnv &env) {
 		configured_hostname = m_oss->getStoragePrefix();
 	}
 
-	//
 	// Check the path for validity.
-	//
 	std::string object;
 	int rv = parse_path(configured_hostname, path, object);
 
@@ -116,14 +150,20 @@ int HTTPFile::Open(const char *path, int Oflag, mode_t Mode, XrdOucEnv &env) {
 	m_hostUrl = configured_hostUrl;
 
 	if (!Oflag) {
+		m_log.Log(LogMask::Debug, "HTTPFile::Open", "Fstat");
 		struct stat buf;
 		return Fstat(&buf);
 	}
 
+	m_is_open = true;
 	return 0;
 }
 
 ssize_t HTTPFile::Read(void *buffer, off_t offset, size_t size) {
+	if (!m_is_open) {
+		m_log.Log(LogMask::Warning, "HTTPFile::Read", "File not open");
+		return -EBADF;
+	}
 	HTTPDownload download(m_hostUrl, m_object, m_log, m_oss->getToken());
 	m_log.Log(
 		LogMask::Debug, "HTTPFile::Read",
@@ -251,40 +291,111 @@ int HTTPFile::Fstat(struct stat *buff) {
 }
 
 ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
-	HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
+	if (!m_is_open) {
+		m_log.Log(LogMask::Warning, "HTTPFile::Write", "File not open");
+		return -EBADF;
+	}
 
-	std::string payload((char *)buffer, size);
-	if (!upload.SendRequest(payload, offset, size)) {
-		m_log.Emsg("HTTPFile::Write", "upload.SendRequest() failed");
-		auto httpCode = upload.getResponseCode();
-		if (httpCode) {
-			std::stringstream ss;
-			ss << "PUT command failed: " << upload.getResponseCode() << ": "
-			   << upload.getResultString();
-			m_log.Emsg("HTTPFile::Write", ss.str().c_str());
-			switch (httpCode) {
-			case 404:
-				return -ENOENT;
-			case 500:
-				return -EIO;
-			case 403:
-				return -EPERM;
-			default:
-				return -EIO;
-			}
+	auto write_mutex = m_write_lk;
+	if (!write_mutex) {
+		return -EBADF;
+	}
+	std::lock_guard lk(*write_mutex);
+
+	// Small object optimization as in S3File::Write()
+	if (!m_write_offset && m_object_size == static_cast<off_t>(size)) {
+		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
+		std::string payload((char *)buffer, size);
+		if (!upload.SendRequest(payload)) {
+			m_log.Emsg("HTTPFile::Write", "upload.SendRequest() failed");
+			return -EIO;
 		} else {
-			m_log.Emsg("HTTPFile::Write", "Failed to send PUT command");
+			m_write_offset += size;
+			m_log.Log(LogMask::Debug, "HTTPFile::Write",
+					  "Creation of small object succeeded",
+					  std::to_string(size).c_str());
+			return size;
+		}
+	}
+	// If we don't have an in-progress upload, start one
+	if (!m_write_op) {
+		if (offset != 0) {
+			m_log.Emsg("HTTPFile::Write", "Out-of-order write detected; HTTP "
+										  "requires writes to be in order");
+			m_write_offset = -1;
 			return -EIO;
 		}
-	} else {
-		m_log.Log(LogMask::Debug, "HTTPFile::Write",
-				  "upload.SendRequest() succeeded");
-		return 0;
+		m_write_op.reset(
+			new HTTPUpload(m_hostUrl, m_object, m_log, m_oss->getToken()));
+		std::string payload((char *)buffer, size);
+		if (!m_write_op->StartStreamingRequest(payload, m_object_size)) {
+			m_log.Emsg("HTTPFile::Write", "First write request failed");
+			return -EIO;
+		} else {
+			m_write_offset += size;
+			m_log.Log(LogMask::Debug, "HTTPFile::Write",
+					  "First write request succeeded",
+					  std::to_string(size).c_str());
+			return size;
+		}
 	}
+	// Validate continuing writing at offset
+	if (offset != static_cast<int64_t>(m_write_offset)) {
+		std::stringstream ss;
+		ss << "Requested write offset at " << offset
+		   << " does not match current file descriptor offset at "
+		   << m_write_offset;
+		m_log.Log(LogMask::Warning, "HTTPFile::Write", ss.str().c_str());
+		return -EIO;
+	}
+
+	// Continue the write
+	m_log.Log(LogMask::Debug, "HTTPFile::Write",
+			  "Attempting a continued write");
+	std::string payload((char *)buffer, size);
+	if (!m_write_op->ContinueStreamingRequest(payload, m_object_size, false)) {
+		m_log.Emsg("HTTPFile::Write", "Failed to continue write request");
+		return -EIO;
+	} else {
+		m_write_offset += size;
+		m_log.Log(LogMask::Debug, "HTTPFile::Write",
+				  "Continued request succeeded", std::to_string(size).c_str());
+	}
+	return size;
 }
 
 int HTTPFile::Close(long long *retsz) {
-	m_log.Emsg("HTTPFile::Close", "Closed our HTTP file");
+	if (!m_is_open) {
+		m_log.Log(LogMask::Error, "HTTPFile::Close",
+				  "Cannot close. URL isn't open");
+		return -EBADF;
+	}
+	m_is_open = false;
+	// If we opened the object in write mode but did not actually write
+	// anything, make a quick zero-length file.
+	if (m_write && !m_write_offset) {
+		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
+		if (!upload.SendRequest(nullptr)) {
+			m_log.Emsg("HTTPFile::Close",
+					   "Failed to create zero-length object");
+			return -EIO;
+		} else {
+			m_log.Log(LogMask::Debug, "HTTPFile::Close",
+					  "Creation of zero-length succeeded");
+			return 0;
+		}
+	}
+	// Flush
+	// if (m_write_op) {
+	// 	std::lock_guard lk(*m_write_lk);
+	// 	std::string_view payload = std::string_view((char *)nullptr, 0);
+	// 	if (!m_write_op->ContinueStreamingRequest(payload, 0, true)) {
+	// 		m_log.Emsg("HTTPFile::Close", "Failed flushing the final buffer");
+	// 		return -EIO;
+	// 	}
+	// }
+	m_log.Log(LogMask::Debug, "HTTPFile::Close",
+			  "Closed HTTP file:", m_object.c_str());
 	return 0;
 }
 

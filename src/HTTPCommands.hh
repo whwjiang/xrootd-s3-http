@@ -57,7 +57,7 @@ class HTTPRequest {
 
 	virtual bool parseProtocol(const std::string &url, std::string &protocol);
 
-	virtual bool SendHTTPRequest(const std::string &payload);
+	virtual bool SendHTTPRequest(const std::string &payload, bool final = true);
 
 	unsigned long getResponseCode() const { return responseCode; }
 	const std::string &getErrorCode() const { return errorCode; }
@@ -295,8 +295,13 @@ class HTTPUpload : public HTTPRequest {
 
 	virtual ~HTTPUpload();
 
-	virtual bool SendRequest(const std::string &payload, off_t offset,
-							 size_t size);
+	virtual bool SendRequest(const std::string &payload, bool final = true);
+
+	bool StartStreamingRequest(const std::string_view payload,
+							   off_t object_size);
+
+	bool ContinueStreamingRequest(const std::string_view payload,
+								  off_t object_size, bool final);
 
   protected:
 	std::string object;

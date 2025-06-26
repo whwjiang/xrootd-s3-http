@@ -130,7 +130,7 @@ bool HTTPRequest::parseProtocol(const std::string &url, std::string &protocol) {
 	return true;
 }
 
-bool HTTPRequest::SendHTTPRequest(const std::string &payload) {
+bool HTTPRequest::SendHTTPRequest(const std::string &payload, bool final) {
 	if ((m_protocol != "http") && (m_protocol != "https")) {
 		errorCode = "E_INVALID_SERVICE_URL";
 		errorMessage = "Service URL not of a known protocol (http[s]).";
@@ -142,7 +142,7 @@ bool HTTPRequest::SendHTTPRequest(const std::string &payload) {
 
 	headers["Content-Type"] = "binary/octet-stream";
 
-	return sendPreparedRequest(hostUrl, payload, payload.size(), true);
+	return sendPreparedRequest(hostUrl, payload, payload.size(), final);
 }
 
 static void dump(XrdSysError *log, const char *text, unsigned char *ptr,
@@ -277,11 +277,22 @@ size_t HTTPRequest::ReadCallback(char *buffer, size_t size, size_t n, void *v) {
 		return CURL_READFUNC_ABORT;
 	}
 
+	payload->m_parent.m_log.Log(
+		LogMask::Debug, "ReadCallback",
+		("sentSoFar=" + std::to_string(payload->sentSoFar) +
+		 " data.size=" + std::to_string(payload->data.size()) +
+		 " final=" + std::to_string(payload->final))
+			.c_str());
+
 	if (payload->sentSoFar == static_cast<off_t>(payload->data.size())) {
 		payload->sentSoFar = 0;
 		if (payload->final) {
+			payload->m_parent.m_log.Log(LogMask::Debug, "ReadCallback",
+										"Final block");
 			return 0;
 		} else {
+			payload->m_parent.m_log.Log(LogMask::Debug, "ReadCallback",
+										"Not final block");
 			payload->NotifyPaused();
 			return CURL_READFUNC_PAUSE;
 		}
@@ -712,6 +723,8 @@ bool HTTPRequest::Fail(const std::string &ecode, const std::string &emsg) {
 
 void HTTPRequest::Notify() {
 	std::lock_guard<std::mutex> lk(m_mtx);
+	m_log.Log(LogMask::Debug, "HTTPRequest::Notify",
+			  "Notifying about result from: ", httpVerb.c_str());
 	m_result_ready = true;
 	modifyResponse(m_result);
 	m_cv.notify_one();
@@ -778,10 +791,21 @@ void HTTPRequest::ProcessCurlResult(CURL *curl, CURLcode rv) {
 
 HTTPUpload::~HTTPUpload() {}
 
-bool HTTPUpload::SendRequest(const std::string &payload, off_t offset,
-							 size_t size) {
+bool HTTPUpload::SendRequest(const std::string &payload, bool final) {
 	httpVerb = "PUT";
-	return SendHTTPRequest(payload);
+	return SendHTTPRequest(payload, final);
+}
+
+bool HTTPUpload::StartStreamingRequest(const std::string_view payload,
+									   off_t object_size) {
+	httpVerb = "PUT";
+	headers["Content-Type"] = "binary/octet-stream";
+	return sendPreparedRequest(hostUrl, payload, object_size, false);
+}
+
+bool HTTPUpload::ContinueStreamingRequest(const std::string_view payload,
+										  off_t object_size, bool final) {
+	return sendPreparedRequest(hostUrl, payload, object_size, final);
 }
 
 void HTTPRequest::Init(XrdSysError &log) {
