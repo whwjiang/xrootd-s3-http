@@ -32,7 +32,6 @@
 
 #include <charconv>
 #include <filesystem>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -119,13 +118,20 @@ int HTTPFile::Open(const char *path, int Oflag, mode_t Mode, XrdOucEnv &env) {
 		off_t result{0};
 		auto [ptr, ec] = std::from_chars(
 			asize_char, asize_char + strlen(asize_char), result);
-		if (ec == std::errc()) {
+		if (ec == std::errc() && ptr == asize_char + strlen(asize_char)) {
+			if (result < 0) {
+				m_log.Log(LogMask::Warning, "HTTPFile::Open",
+						  "Opened file has oss.asize set to a negative value:",
+						  asize_char);
+				return -EIO;
+			}
 			m_object_size = result;
 		} else {
 			std::stringstream ss;
 			ss << "Opened file has oss.asize set to an unparseable value: "
 			   << asize_char;
 			m_log.Log(LogMask::Warning, "HTTPFile::Open", ss.str().c_str());
+			return -EIO;
 		}
 	}
 
@@ -152,7 +158,10 @@ int HTTPFile::Open(const char *path, int Oflag, mode_t Mode, XrdOucEnv &env) {
 	if (!Oflag) {
 		m_log.Log(LogMask::Debug, "HTTPFile::Open", "Fstat");
 		struct stat buf;
-		return Fstat(&buf);
+		auto rv = Fstat(&buf);
+		if (rv < 0) {
+			return rv;
+		}
 	}
 
 	m_is_open = true;
@@ -171,11 +180,7 @@ ssize_t HTTPFile::Read(void *buffer, off_t offset, size_t size) {
 		m_hostname.c_str(), m_object.c_str());
 
 	if (!download.SendRequest(offset, size)) {
-		std::stringstream ss;
-		ss << "Failed to send GetObject command: " << download.getResponseCode()
-		   << "'" << download.getResultString() << "'";
-		m_log.Log(LogMask::Warning, "HTTPFile::Read", ss.str().c_str());
-		return 0;
+		return HTTPRequest::HandleHTTPError(download, m_log, "GET", m_object.c_str());
 	}
 
 	const std::string &bytes = download.getResultString();
@@ -210,29 +215,7 @@ int HTTPFile::Fstat(struct stat *buff) {
 		// than code 200.  If xrootd wants us to distinguish between
 		// these cases, head.getResponseCode() is initialized to 0, so
 		// we can check.
-		auto httpCode = head.getResponseCode();
-		if (httpCode) {
-			std::stringstream ss;
-			ss << "HEAD command failed: " << head.getResponseCode() << ": "
-			   << head.getResultString();
-			m_log.Log(LogMask::Warning, "HTTPFile::Fstat", ss.str().c_str());
-			switch (httpCode) {
-			case 404:
-				return -ENOENT;
-			case 500:
-				return -EIO;
-			case 403:
-				return -EPERM;
-			default:
-				return -EIO;
-			}
-		} else {
-			std::stringstream ss;
-			ss << "Failed to send HEAD command: " << head.getErrorCode() << ": "
-			   << head.getErrorMessage();
-			m_log.Log(LogMask::Warning, "HTTPFile::Fstat", ss.str().c_str());
-			return -EIO;
-		}
+		return HTTPRequest::HandleHTTPError(head, m_log, "HEAD", m_object.c_str());
 	}
 
 	std::string headers = head.getResultString();
@@ -296,19 +279,17 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 		return -EBADF;
 	}
 
-	auto write_mutex = m_write_lk;
-	if (!write_mutex) {
+	if (!m_write_lk) {
 		return -EBADF;
 	}
-	std::lock_guard lk(*write_mutex);
+	std::lock_guard lk(*m_write_lk);
 
 	// Small object optimization as in S3File::Write()
 	if (!m_write_offset && m_object_size == static_cast<off_t>(size)) {
 		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
 		std::string payload((char *)buffer, size);
 		if (!upload.SendRequest(payload)) {
-			m_log.Emsg("HTTPFile::Write", "upload.SendRequest() failed");
-			return -EIO;
+			return HTTPRequest::HandleHTTPError(upload, m_log, "PUT", m_object.c_str());
 		} else {
 			m_write_offset += size;
 			m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -320,8 +301,9 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 	// If we don't have an in-progress upload, start one
 	if (!m_write_op) {
 		if (offset != 0) {
-			m_log.Emsg("HTTPFile::Write", "Out-of-order write detected; HTTP "
-										  "requires writes to be in order");
+			m_log.Log(LogMask::Error, "HTTPFile::Write",
+					  "Out-of-order write detected; HTTP "
+					  "requires writes to be in order");
 			m_write_offset = -1;
 			return -EIO;
 		}
@@ -329,8 +311,7 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 			new HTTPUpload(m_hostUrl, m_object, m_log, m_oss->getToken()));
 		std::string payload((char *)buffer, size);
 		if (!m_write_op->StartStreamingRequest(payload, m_object_size)) {
-			m_log.Emsg("HTTPFile::Write", "First write request failed");
-			return -EIO;
+			return HTTPRequest::HandleHTTPError(*m_write_op, m_log, "PUT streaming start", m_object.c_str());
 		} else {
 			m_write_offset += size;
 			m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -350,12 +331,9 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 	}
 
 	// Continue the write
-	m_log.Log(LogMask::Debug, "HTTPFile::Write",
-			  "Attempting a continued write");
 	std::string payload((char *)buffer, size);
 	if (!m_write_op->ContinueStreamingRequest(payload, m_object_size, false)) {
-		m_log.Emsg("HTTPFile::Write", "Failed to continue write request");
-		return -EIO;
+		return HTTPRequest::HandleHTTPError(*m_write_op, m_log, "PUT streaming continue", m_object.c_str());
 	} else {
 		m_write_offset += size;
 		m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -375,25 +353,15 @@ int HTTPFile::Close(long long *retsz) {
 	// anything, make a quick zero-length file.
 	if (m_write && !m_write_offset) {
 		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
-		if (!upload.SendRequest(nullptr)) {
-			m_log.Emsg("HTTPFile::Close",
-					   "Failed to create zero-length object");
-			return -EIO;
+		if (!upload.SendRequest("")) {
+			return HTTPRequest::HandleHTTPError(upload, m_log, "PUT zero-length", m_object.c_str());
 		} else {
 			m_log.Log(LogMask::Debug, "HTTPFile::Close",
 					  "Creation of zero-length succeeded");
 			return 0;
 		}
 	}
-	// Flush
-	// if (m_write_op) {
-	// 	std::lock_guard lk(*m_write_lk);
-	// 	std::string_view payload = std::string_view((char *)nullptr, 0);
-	// 	if (!m_write_op->ContinueStreamingRequest(payload, 0, true)) {
-	// 		m_log.Emsg("HTTPFile::Close", "Failed flushing the final buffer");
-	// 		return -EIO;
-	// 	}
-	// }
+
 	m_log.Log(LogMask::Debug, "HTTPFile::Close",
 			  "Closed HTTP file:", m_object.c_str());
 	return 0;

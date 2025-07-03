@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "HTTPCommands.hh"
 #include "HTTPFileSystem.hh"
 #include "HTTPCommands.hh"
 #include "XrdOss/XrdOss.hh"
@@ -26,10 +27,9 @@
 #include "XrdSec/XrdSecEntityAttr.hh"
 #include "XrdVersion.hh"
 
-#include <memory>
 #include <fcntl.h>
+#include <memory>
 #include <mutex>
-#include <unordered_map>
 
 int parse_path(const std::string &hostname, const char *path,
 			   std::string &object);
@@ -107,23 +107,19 @@ class HTTPFile : public XrdOssDF {
 	std::string m_hostname;
 	std::string m_hostUrl;
 	std::string m_object;
-    // Whether the file was opened in write mode
-    bool m_write{false};
-    // Whether the file is open
-    bool m_is_open{false};
-    // Expected size of the completed object; -1 if unknown.
-	off_t m_object_size{-1}; 
-    off_t m_write_offset{0};
-    std::shared_ptr<std::mutex> m_write_lk;
-    // The in-progress operation for a multi-part upload; its lifetime may be
+	// Whether the file was opened in write mode
+	bool m_write{false};
+	// Whether the file is open
+	bool m_is_open{false};
+	// Expected size of the completed object; -1 if unknown.
+	off_t m_object_size{-1};
+	off_t m_write_offset{0};
+	std::shared_ptr<std::mutex> m_write_lk;
+	// The in-progress operation for a multi-part upload; its lifetime may be
 	// spread across multiple write calls.
-    std::shared_ptr<HTTPUpload> m_write_op;
+	std::shared_ptr<HTTPUpload> m_write_op;
 
 	size_t content_length;
 	time_t last_modified;
 
-    // Static map to provide file-level locking for concurrent access
-    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> s_file_locks;
-    static std::mutex s_file_locks_mutex;
-    std::shared_ptr<std::mutex> m_file_lock;
 };

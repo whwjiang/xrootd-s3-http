@@ -1,6 +1,6 @@
 /***************************************************************
  *
- * Copyright (C) 2024, Pelican Project, Morgridge Institute for Research
+ * Copyright (C) 2025, Pelican Project, Morgridge Institute for Research
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License.  You may
@@ -277,12 +277,23 @@ size_t HTTPRequest::ReadCallback(char *buffer, size_t size, size_t n, void *v) {
 		return CURL_READFUNC_ABORT;
 	}
 
-	payload->m_parent.m_log.Log(
-		LogMask::Debug, "ReadCallback",
-		("sentSoFar=" + std::to_string(payload->sentSoFar) +
-		 " data.size=" + std::to_string(payload->data.size()) +
-		 " final=" + std::to_string(payload->final))
-			.c_str());
+	if (payload->m_parent.m_log.getMsgMask() & LogMask::Dump) {
+		payload->m_parent.m_log.Log(
+			LogMask::Dump, "ReadCallback",
+			("sentSoFar=" + std::to_string(payload->sentSoFar) +
+			 " data.size=" + std::to_string(payload->data.size()) +
+			 " final=" + std::to_string(payload->final))
+				.c_str());
+	}
+
+	if (payload->m_parent.m_log.getMsgMask() & LogMask::Dump) {
+		payload->m_parent.m_log.Log(
+			LogMask::Dump, "ReadCallback",
+			("sentSoFar=" + std::to_string(payload->sentSoFar) +
+			 " data.size=" + std::to_string(payload->data.size()) +
+			 " final=" + std::to_string(payload->final))
+				.c_str());
+	}
 
 	if (payload->sentSoFar == static_cast<off_t>(payload->data.size())) {
 		payload->sentSoFar = 0;
@@ -791,9 +802,9 @@ void HTTPRequest::ProcessCurlResult(CURL *curl, CURLcode rv) {
 
 HTTPUpload::~HTTPUpload() {}
 
-bool HTTPUpload::SendRequest(const std::string &payload, bool final) {
+bool HTTPUpload::SendRequest(const std::string &payload) {
 	httpVerb = "PUT";
-	return SendHTTPRequest(payload, final);
+	return SendHTTPRequest(payload);
 }
 
 bool HTTPUpload::StartStreamingRequest(const std::string_view payload,
@@ -805,6 +816,11 @@ bool HTTPUpload::StartStreamingRequest(const std::string_view payload,
 
 bool HTTPUpload::ContinueStreamingRequest(const std::string_view payload,
 										  off_t object_size, bool final) {
+    // Note that despite the fact that final gets passed through here,
+    // in reality the way that curl determines whether the data transfer is
+    // done is by seeing if the total amount of data sent is equal to the 
+    // expected size of the entire payload, stored in m_object_size.
+    // See HTTPRequest::ReadCallback for more info
 	return sendPreparedRequest(hostUrl, payload, object_size, final);
 }
 
@@ -854,3 +870,43 @@ bool HTTPHead::SendRequest() {
 }
 
 // ---------------------------------------------------------------------------
+
+int HTTPRequest::HandleHTTPError(const HTTPRequest &request, XrdSysError &log,
+								 const char *operation, const char *context) {
+	auto httpCode = request.getResponseCode();
+	if (httpCode) {
+		std::stringstream ss;
+		ss << operation << " failed: " << request.getResponseCode() << ": "
+		   << request.getResultString();
+		if (context) {
+			ss << " (context: " << context << ")";
+		}
+		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError", ss.str().c_str());
+		
+		switch (httpCode) {
+		case 404:
+			return -ENOENT;
+		case 500:
+			return -EIO;
+		case 403:
+			return -EPERM;
+		case 401:
+			return -EACCES;
+		case 400:
+			return -EINVAL;
+		case 503:
+			return -EAGAIN;
+		default:
+			return -EIO;
+		}
+	} else {
+		std::stringstream ss;
+		ss << "Failed to send " << operation << " command: " 
+		   << request.getErrorCode() << ": " << request.getErrorMessage();
+		if (context) {
+			ss << " (context: " << context << ")";
+		}
+		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError", ss.str().c_str());
+		return -EIO;
+	}
+}
