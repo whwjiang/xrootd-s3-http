@@ -121,7 +121,6 @@ TEST(TestHTTPFile, TestWriteSmallFile) {
 	// Write some test data
 	const char test_data[] = "This is a test file for writing operations.";
 	const size_t data_size = strlen(test_data);
-
 	auto write_res = fh->Write(test_data, 0, data_size);
 	ASSERT_EQ(write_res, static_cast<ssize_t>(data_size));
 
@@ -161,7 +160,6 @@ TEST(TestHTTPFile, TestWriteLargeFile) {
 	// Generate 2 MB of test data
 	const size_t file_size = 2 * 1024 * 1024; // 2 MB
 	std::vector<char> test_data(file_size);
-
 	// Fill with a repeating pattern for easy verification
 	for (size_t i = 0; i < file_size; i++) {
 		test_data[i] = static_cast<char>(i % 256);
