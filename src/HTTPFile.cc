@@ -180,7 +180,8 @@ ssize_t HTTPFile::Read(void *buffer, off_t offset, size_t size) {
 		m_hostname.c_str(), m_object.c_str());
 
 	if (!download.SendRequest(offset, size)) {
-		return HTTPRequest::HandleHTTPError(download, m_log, "GET", m_object.c_str());
+		return HTTPRequest::HandleHTTPError(download, m_log, "GET",
+											m_object.c_str());
 	}
 
 	const std::string &bytes = download.getResultString();
@@ -215,7 +216,8 @@ int HTTPFile::Fstat(struct stat *buff) {
 		// than code 200.  If xrootd wants us to distinguish between
 		// these cases, head.getResponseCode() is initialized to 0, so
 		// we can check.
-		return HTTPRequest::HandleHTTPError(head, m_log, "HEAD", m_object.c_str());
+		return HTTPRequest::HandleHTTPError(head, m_log, "HEAD",
+											m_object.c_str());
 	}
 
 	std::string headers = head.getResultString();
@@ -289,7 +291,8 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
 		std::string payload((char *)buffer, size);
 		if (!upload.SendRequest(payload)) {
-			return HTTPRequest::HandleHTTPError(upload, m_log, "PUT", m_object.c_str());
+			return HTTPRequest::HandleHTTPError(upload, m_log, "PUT",
+												m_object.c_str());
 		} else {
 			m_write_offset += size;
 			m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -311,7 +314,8 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 			new HTTPUpload(m_hostUrl, m_object, m_log, m_oss->getToken()));
 		std::string payload((char *)buffer, size);
 		if (!m_write_op->StartStreamingRequest(payload, m_object_size)) {
-			return HTTPRequest::HandleHTTPError(*m_write_op, m_log, "PUT streaming start", m_object.c_str());
+			return HTTPRequest::HandleHTTPError(
+				*m_write_op, m_log, "PUT streaming start", m_object.c_str());
 		} else {
 			m_write_offset += size;
 			m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -333,7 +337,8 @@ ssize_t HTTPFile::Write(const void *buffer, off_t offset, size_t size) {
 	// Continue the write
 	std::string payload((char *)buffer, size);
 	if (!m_write_op->ContinueStreamingRequest(payload, m_object_size, false)) {
-		return HTTPRequest::HandleHTTPError(*m_write_op, m_log, "PUT streaming continue", m_object.c_str());
+		return HTTPRequest::HandleHTTPError(
+			*m_write_op, m_log, "PUT streaming continue", m_object.c_str());
 	} else {
 		m_write_offset += size;
 		m_log.Log(LogMask::Debug, "HTTPFile::Write",
@@ -354,11 +359,23 @@ int HTTPFile::Close(long long *retsz) {
 	if (m_write && !m_write_offset) {
 		HTTPUpload upload(m_hostUrl, m_object, m_log, m_oss->getToken());
 		if (!upload.SendRequest("")) {
-			return HTTPRequest::HandleHTTPError(upload, m_log, "PUT zero-length", m_object.c_str());
+			return HTTPRequest::HandleHTTPError(
+				upload, m_log, "PUT zero-length", m_object.c_str());
 		} else {
 			m_log.Log(LogMask::Debug, "HTTPFile::Close",
 					  "Creation of zero-length succeeded");
 			return 0;
+		}
+	}
+
+	if (m_write && m_object_size == -1) {
+		// if we didn't get a size, we need to explicitly close the upload
+		if (!m_write_op->ContinueStreamingRequest("", 0, true)) {
+			return HTTPRequest::HandleHTTPError(
+				*m_write_op, m_log, "PUT streaming close", m_object.c_str());
+		} else {
+			m_log.Log(LogMask::Debug, "HTTPFile::Write",
+					  "PUT streaming close succeeded");
 		}
 	}
 

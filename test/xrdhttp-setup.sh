@@ -162,7 +162,7 @@ EOF
 
 cat > $XROOTD_CONFIGDIR/authdb <<EOF
 
-u * / lrw
+u * / all
 
 EOF
 
@@ -201,6 +201,7 @@ echo "xrootd started at $XROOTD_URL"
 XROOTD_HTTPSERVER_CONFIG="$XROOTD_CONFIGDIR/xrootd-httpserver.cfg"
 cat > "$XROOTD_HTTPSERVER_CONFIG" <<EOF
 
+httpserver.trace all dump
 httpserver.url_base $XROOTD_URL
 httpserver.storage_prefix /
 
