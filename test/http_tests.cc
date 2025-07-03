@@ -27,6 +27,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <memory>
 #include <string>
 
 std::string g_ca_file;
@@ -60,16 +61,16 @@ void parseEnvFile(const std::string &fname) {
 
 TEST(TestHTTPFile, TestXfer) {
 	XrdSysLogger log;
-
 	HTTPFileSystem fs(&log, g_config_file.c_str(), nullptr);
 
 	struct stat si;
-	auto rc = fs.Stat("/hello_world.txt", &si);
+    XrdOucEnv env;
+    env.Put("oss.asize", "13"); 
+	auto rc = fs.Stat("/hello_world.txt", &si, 0, &env);
 	ASSERT_EQ(rc, 0);
 	ASSERT_EQ(si.st_size, 13);
 
-	auto fh = fs.newFile();
-	XrdOucEnv env;
+	std::unique_ptr<XrdOssDF> fh(fs.newFile());
 	rc = fh->Open("/hello_world.txt", O_RDONLY, 0700, env);
 	ASSERT_EQ(rc, 0);
 
@@ -80,6 +81,66 @@ TEST(TestHTTPFile, TestXfer) {
 	ASSERT_EQ(memcmp(buf, "Hello, World", 12), 0);
 
 	ASSERT_EQ(fh->Close(), 0);
+}
+
+TEST(TestHTTPFile, TestWriteZeroByteFile) {
+	XrdSysLogger log;
+	HTTPFileSystem fs(&log, g_config_file.c_str(), nullptr);
+
+	XrdOucEnv env;
+	std::unique_ptr<XrdOssDF> fh(fs.newFile());
+	
+	// Create a 0-byte file
+	auto rc = fh->Open("/empty_file.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644, env);
+	ASSERT_EQ(rc, 0);
+
+	// Close the file immediately (0 bytes written)
+	ASSERT_EQ(fh->Close(), 0);
+
+	// Verify the file exists and has 0 size
+	struct stat si;
+	rc = fs.Stat("/empty_file.txt", &si, 0, &env);
+	ASSERT_EQ(rc, 0);
+	ASSERT_EQ(si.st_size, 0);
+}
+
+TEST(TestHTTPFile, TestWriteSmallFile) {
+	XrdSysLogger log;
+	HTTPFileSystem fs(&log, g_config_file.c_str(), nullptr);
+
+	XrdOucEnv env;
+	std::unique_ptr<XrdOssDF> fh(fs.newFile());
+	
+	// Create a small file
+	auto rc = fh->Open("/test_write.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644, env);
+	ASSERT_EQ(rc, 0);
+
+	// Write some test data
+	const char test_data[] = "This is a test file for writing operations.";
+	const size_t data_size = strlen(test_data);
+	
+	auto write_res = fh->Write(test_data, 0, data_size);
+	ASSERT_EQ(write_res, static_cast<ssize_t>(data_size));
+
+	ASSERT_EQ(fh->Close(), 0);
+
+	// Verify the file was written correctly
+	struct stat si;
+	rc = fs.Stat("/test_write.txt", &si, 0, &env);
+	ASSERT_EQ(rc, 0);
+	ASSERT_EQ(si.st_size, data_size);
+
+	// Read back the file to verify content
+	std::unique_ptr<XrdOssDF> read_fh(fs.newFile());
+	rc = read_fh->Open("/test_write.txt", O_RDONLY, 0644, env);
+	ASSERT_EQ(rc, 0);
+
+	char read_buf[256];
+	auto read_res = read_fh->Read(read_buf, 0, data_size);
+	ASSERT_EQ(read_res, static_cast<ssize_t>(data_size));
+	ASSERT_EQ(memcmp(read_buf, test_data, data_size), 0);
+
+	ASSERT_EQ(read_fh->Close(), 0);
 }
 
 class TestHTTPRequest : public HTTPRequest {
