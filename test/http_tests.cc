@@ -90,7 +90,6 @@ TEST(TestHTTPFile, TestWriteZeroByteFile) {
 
 	XrdOucEnv env;
 	std::unique_ptr<XrdOssDF> fh(fs.newFile());
-
 	// Create a 0-byte file
 	auto rc =
 		fh->Open("/empty_file.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644, env);
