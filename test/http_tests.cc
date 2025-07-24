@@ -175,7 +175,6 @@ TEST(TestHTTPFile, TestWriteLargeFile) {
 		ASSERT_EQ(write_res, static_cast<ssize_t>(current_chunk_size));
 		total_written += current_chunk_size;
 	}
-
 	ASSERT_EQ(total_written, file_size);
 	ASSERT_EQ(fh->Close(), 0);
 
@@ -193,7 +192,6 @@ TEST(TestHTTPFile, TestWriteLargeFile) {
 	// Read the data in chunks
 	std::vector<char> read_buf(file_size);
 	size_t total_read = 0;
-
 	for (size_t offset = 0; offset < file_size; offset += chunk_size) {
 		size_t current_chunk_size = std::min(chunk_size, file_size - offset);
 		auto read_res =
@@ -201,7 +199,6 @@ TEST(TestHTTPFile, TestWriteLargeFile) {
 		ASSERT_EQ(read_res, static_cast<ssize_t>(current_chunk_size));
 		total_read += current_chunk_size;
 	}
-
 	ASSERT_EQ(total_read, file_size);
 	ASSERT_EQ(memcmp(read_buf.data(), test_data.data(), file_size), 0);
 
@@ -211,7 +208,7 @@ TEST(TestHTTPFile, TestWriteLargeFile) {
 class TestHTTPRequest : public HTTPRequest {
   public:
 	XrdSysLogger log{};
-	XrdSysError err{&log, "TestHTTPR3equest"};
+	XrdSysError err{&log, "TestHTTPRequest"};
 
 	TestHTTPRequest(const std::string &url) : HTTPRequest(url, err, nullptr) {}
 };
