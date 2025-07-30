@@ -192,9 +192,9 @@ int GlobusFileSystem::Stat(const char *path, struct stat *buff, int opts,
         if (json_response.contains("type")) {
             std::string type = json_response["type"].get<std::string>();
             if (type == "dir") {
-                buff->st_mode = S_IFDIR | 0755;  // Directory with rwxr-xr-x
+                buff->st_mode = S_IFDIR | 0755;
             } else if (type == "file") {
-                buff->st_mode = S_IFREG | 0644;  // Regular file with rw-r--r--
+                buff->st_mode = S_IFREG | 0644;
             }
         }
         
@@ -203,11 +203,8 @@ int GlobusFileSystem::Stat(const char *path, struct stat *buff, int opts,
             buff->st_size = json_response["size"].get<off_t>();
         }
         
-        // Set ownership (use current user/group if not specified)
-        buff->st_uid = getuid();
-        buff->st_gid = getgid();
+        buff->st_uid = buff->st_gid = 1;
         
-        // Set timestamps using the static method
         if (json_response.contains("last_modified")) {
             std::string last_modified = json_response["last_modified"].get<std::string>();
             time_t timestamp = parseTimestamp(last_modified);
@@ -222,6 +219,25 @@ int GlobusFileSystem::Stat(const char *path, struct stat *buff, int opts,
         buff->st_nlink = (buff->st_mode & S_IFDIR) ? 2 : 1;
         
         m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "Successfully parsed stat response");
+        // INSERT_YOUR_CODE
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_mode:", std::to_string(buff->st_mode).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_nlink:", std::to_string(buff->st_nlink).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_uid:", std::to_string(buff->st_uid).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_gid:", std::to_string(buff->st_gid).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_size:", std::to_string(buff->st_size).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_atime:", std::to_string(buff->st_atime).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_mtime:", std::to_string(buff->st_mtime).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_ctime:", std::to_string(buff->st_ctime).c_str());
+        m_log.Log(LogMask::Debug, "GlobusFileSystem::Stat", "stat buffer fields:",
+            "st_nlink:", std::to_string(buff->st_nlink).c_str());
         return 0;
         
     } catch (const nlohmann::json::exception &e) {
@@ -249,7 +265,7 @@ const std::string GlobusFileSystem::getOperationUrl(const std::string &operation
 	
 	// Append the relative path to the URL
 	if (!relative_path.empty()) {
-		result += "&relative_path=" + relative_path;
+		result += relative_path;
 	}
 	
 	return result;
