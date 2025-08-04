@@ -563,6 +563,15 @@ bool HTTPRequest::SetupHandle(CURL *curl) {
 		}
 	}
 
+	if (httpVerb == "DELETE") {
+		rv = curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+		if (rv != CURLE_OK) {
+			this->errorCode = "E_CURL_LIB";
+			this->errorMessage = "curl_easy_setopt( CURLOPT_CUSTOMREQUEST ) failed.";
+			return false;
+		}
+	}
+
 	rv = curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
 	if (rv != CURLE_OK) {
 		this->errorCode = "E_CURL_LIB";
@@ -870,6 +879,18 @@ HTTPHead::~HTTPHead() {}
 
 bool HTTPHead::SendRequest() {
 	httpVerb = "HEAD";
+	includeResponseHeader = true;
+	std::string noPayloadAllowed;
+	return SendHTTPRequest(noPayloadAllowed);
+}
+
+// ---------------------------------------------------------------------------
+
+HTTPDelete::~HTTPDelete() {}
+
+bool HTTPDelete::SendRequest() {
+	httpVerb = "DELETE";
+	this->expectedResponseCode = 204;
 	includeResponseHeader = true;
 	std::string noPayloadAllowed;
 	return SendHTTPRequest(noPayloadAllowed);
