@@ -45,7 +45,7 @@ find_package( Filesystem REQUIRED )
 find_package( Atomic REQUIRED )
 
 # Add nlohmann/json dependency
-find_package(nlohmann_json 3.11.2 REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 if( NOT XROOTD_EXTERNAL_TINYXML2 )
   include(FetchContent)

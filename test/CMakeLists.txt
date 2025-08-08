@@ -49,8 +49,6 @@ find_program(MC_BIN mc       HINTS "${CMAKE_CURRENT_BINARY_DIR}")
 
 include(GoogleTest)
 
-find_package(nlohmann_json 3.11.2 REQUIRED)
-
 add_executable( s3-gtest s3_tests.cc )
 add_executable( s3-unit-test s3_unit_tests.cc )
 add_executable( http-gtest http_tests.cc )
