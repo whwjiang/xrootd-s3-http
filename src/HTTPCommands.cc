@@ -142,8 +142,9 @@ bool HTTPRequest::SendHTTPRequest(const std::string &payload, bool final) {
 
 	headers["Content-Type"] = "binary/octet-stream";
 
-    m_log.Log(LogMask::Debug, "HTTPRequest::SendHTTPRequest", "Sending request");
-    
+	m_log.Log(LogMask::Debug, "HTTPRequest::SendHTTPRequest",
+			  "Sending request");
+
 	return sendPreparedRequest(hostUrl, payload, payload.size(), final);
 }
 
@@ -405,7 +406,7 @@ bool HTTPRequest::sendPreparedRequest(const std::string &uri,
 }
 
 void HTTPRequest::Tick(std::chrono::steady_clock::time_point now) {
-    m_log.Log(LogMask::Debug, "HTTPRequest::Tick", "Tick called");
+	m_log.Log(LogMask::Debug, "HTTPRequest::Tick", "Tick called");
 	if (!m_is_streaming) {
 		return;
 	}
@@ -567,7 +568,8 @@ bool HTTPRequest::SetupHandle(CURL *curl) {
 		rv = curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
 		if (rv != CURLE_OK) {
 			this->errorCode = "E_CURL_LIB";
-			this->errorMessage = "curl_easy_setopt( CURLOPT_CUSTOMREQUEST ) failed.";
+			this->errorMessage =
+				"curl_easy_setopt( CURLOPT_CUSTOMREQUEST ) failed.";
 			return false;
 		}
 	}
@@ -709,9 +711,11 @@ bool HTTPRequest::SetupHandle(CURL *curl) {
 			return false;
 		}
 	}
-    m_log.Log(LogMask::Debug, "SetupHandle", "Checking if curl verbose logging is enabled");
+	m_log.Log(LogMask::Debug, "SetupHandle",
+			  "Checking if curl verbose logging is enabled");
 	if (m_log.getMsgMask() & LogMask::Dump) {
-		m_log.Log(LogMask::Dump, "SetupHandle", "Enabling curl verbose logging for URL:", m_uri.c_str());
+		m_log.Log(LogMask::Dump, "SetupHandle",
+				  "Enabling curl verbose logging for URL:", m_uri.c_str());
 		rv =
 			curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debugAndDumpCallback);
 		if (rv != CURLE_OK) {
@@ -830,16 +834,16 @@ bool HTTPUpload::StartStreamingRequest(const std::string_view payload,
 
 bool HTTPUpload::ContinueStreamingRequest(const std::string_view payload,
 										  off_t object_size, bool final) {
-    // Note that despite the fact that final gets passed through here,
-    // in reality the way that curl determines whether the data transfer is
-    // done is by seeing if the total amount of data sent is equal to the 
-    // expected size of the entire payload, stored in m_object_size.
-    // See HTTPRequest::ReadCallback for more info
+	// Note that despite the fact that final gets passed through here,
+	// in reality the way that curl determines whether the data transfer is
+	// done is by seeing if the total amount of data sent is equal to the
+	// expected size of the entire payload, stored in m_object_size.
+	// See HTTPRequest::ReadCallback for more info
 	return sendPreparedRequest(hostUrl, payload, object_size, final);
 }
 
 void HTTPRequest::Init(XrdSysError &log) {
-    log.Log(LogMask::Debug, "HTTPRequest::Init", "called");
+	log.Log(LogMask::Debug, "HTTPRequest::Init", "called");
 	if (!m_workers_initialized) {
 		for (unsigned idx = 0; idx < CurlWorker::GetPollThreads(); idx++) {
 			m_workers.push_back(new CurlWorker(m_queue, log));
@@ -867,7 +871,8 @@ bool HTTPDownload::SendRequest(off_t offset, size_t size) {
 		headers["Range"] = range.c_str();
 		this->expectedResponseCode = 206;
 	}
-    m_log.Log(LogMask::Debug, "HTTPDownload::SendRequest", "Sending GET request");
+	m_log.Log(LogMask::Debug, "HTTPDownload::SendRequest",
+			  "Sending GET request");
 	httpVerb = "GET";
 	std::string noPayloadAllowed;
 	return SendHTTPRequest(noPayloadAllowed);
@@ -908,8 +913,9 @@ int HTTPRequest::HandleHTTPError(const HTTPRequest &request, XrdSysError &log,
 		if (context) {
 			ss << " (context: " << context << ")";
 		}
-		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError", ss.str().c_str());
-		
+		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError",
+				ss.str().c_str());
+
 		switch (httpCode) {
 		case 404:
 			return -ENOENT;
@@ -928,12 +934,14 @@ int HTTPRequest::HandleHTTPError(const HTTPRequest &request, XrdSysError &log,
 		}
 	} else {
 		std::stringstream ss;
-		ss << "Failed to send " << operation << " command: " 
-		   << request.getErrorCode() << ": " << request.getErrorMessage();
+		ss << "Failed to send " << operation
+		   << " command: " << request.getErrorCode() << ": "
+		   << request.getErrorMessage();
 		if (context) {
 			ss << " (context: " << context << ")";
 		}
-		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError", ss.str().c_str());
+		log.Log(LogMask::Warning, "HTTPRequest::HandleHTTPError",
+				ss.str().c_str());
 		return -EIO;
 	}
 }
